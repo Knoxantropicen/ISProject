@@ -3,17 +3,17 @@ import numpy as np
 from bitarray import *
 import os
 
-
 # parameters
-IMAGE_PATH = 'test.png'
+IMAGE_NAME = 'test16.bmp'
 MAX_ROUND = 2   # max round number (currently support 1, 2)
 RANDOM_SEED = 0
+SCHEME = 'BX'   # choose BX or MA
 
 def main():
     np.random.seed(RANDOM_SEED)
     K = randomKeyGenerator()
     print('Key:', K)
-    enc = Enc(IMAGE_PATH, K, MAX_ROUND)
+    enc = Enc(IMAGE_NAME, K, MAX_ROUND, SCHEME)
     enc.encryption()
     enc.decryption()
     enc.saveResultImage()
@@ -51,12 +51,17 @@ def bitsToInt(Bin):
 
 # main class
 class Enc:
-    def __init__(self, imgpath, K, max_round):
+    def __init__(self, imgname, K, max_round, scheme):
         # load image from file
-        self.img = Image.open(imgpath)
+        self.img = Image.open('test_image/' + imgname)
         rows, cols = self.img.size[0], self.img.size[1]
-        self.P = np.asarray(self.img, dtype='int32').reshape((rows, cols, 4))   # 
+        img_array = np.asarray(self.img, dtype='int32')
+        assert len(img_array.shape) >= 2    # image validation
+        self.channel_3_dim = 1 if len(img_array.shape) == 2 else img_array.shape[2] # find 3rd channel dimension
+        self.P = img_array.reshape(rows, cols, self.channel_3_dim)
         self.max_round = max_round      # max round number
+        assert scheme == 'BX' or scheme == 'MA'
+        self.scheme = scheme
 
         # initial states generation given K
         assert len(K) == 256
@@ -111,18 +116,21 @@ class Enc:
         T = self.T_group[round]
 
         # Q matrix generation
-        Q_sequence = LSS_PRNG_sequence(self.X0[round], self.r[round], M * N * 4)
-        Q = (np.reshape(Q_sequence, (M, N, 4)) * 256).astype(int)
+        Q_sequence = LSS_PRNG_sequence(self.X0[round], self.r[round], M * N * self.channel_3_dim)
+        Q = (np.reshape(Q_sequence, (M, N, self.channel_3_dim)) * 256).astype(int)
         self.Q_group.append(Q)
 
         # C matrix generation
         self.C = np.empty_like(Q)
-        self.C[0, 0] = T[0, 0] ^ T[M - 1, N - 1] ^ Q[0, 0]
-        for j in range(1, N):
-            self.C[0, j] = T[0, j] ^ self.C[0, j - 1] ^ Q[0, j]
-        for i in range(1, M):
-            for j in range(N):
-                self.C[i, j] = T[i, j] ^ self.C[i - 1, j] ^ Q[i, j]
+        if self.scheme == 'BX':
+            self.C[0, 0] = T[0, 0] ^ T[M - 1, N - 1] ^ Q[0, 0]
+            for j in range(1, N):
+                self.C[0, j] = T[0, j] ^ self.C[0, j - 1] ^ Q[0, j]
+            for i in range(1, M):
+                for j in range(N):
+                    self.C[i, j] = T[i, j] ^ self.C[i - 1, j] ^ Q[i, j]
+        else:
+            pass
 
         # prepare input for next round
         if round != self.max_round - 1:
@@ -151,12 +159,15 @@ class Enc:
             S = self.S_group[round]
 
             # T matrix decryption
-            T[0, 0] = self.C[0, 0] ^ T[M - 1, N - 1] ^ Q[0, 0]
-            for j in range(1, N):
-                T[0, j] = self.C[0, j] ^ self.C[0, j - 1] ^ Q[0, j]
-            for i in range(1, M):
-                for j in range(N):
-                    T[i, j] = self.C[i, j] ^ self.C[i - 1, j] ^ Q[i, j]
+            if self.scheme == 'BX':
+                T[0, 0] = self.C[0, 0] ^ T[M - 1, N - 1] ^ Q[0, 0]
+                for j in range(1, N):
+                    T[0, j] = self.C[0, j] ^ self.C[0, j - 1] ^ Q[0, j]
+                for i in range(1, M):
+                    for j in range(N):
+                        T[i, j] = self.C[i, j] ^ self.C[i - 1, j] ^ Q[i, j]
+            else:
+                pass
 
             # P matrix decryption
             for j in range(N):
@@ -177,16 +188,16 @@ class Enc:
             self.img_decrypted = self.P     # save final decypted image
 
     # general image saving interface
-    def saveImage(self, image, name):
+    def saveImage(self, image, type):
         img = Image.new(self.img.mode, (image.shape[0], image.shape[1]))
-        img_data = image.reshape((-1, 4))
+        img_data = image.reshape((-1, self.channel_3_dim))
         img.putdata(tuple(map(tuple, img_data)))
-        img.save('image/' + name + '.' + self.img.format, format=self.img.format)
+        img.save('output_image/' + type + '_' + IMAGE_NAME, format=self.img.format)
 
     # save necessary image results
     def saveResultImage(self):
-        if not os.path.isdir('image'):
-            os.mkdir('image')
+        if not os.path.isdir('output_image'):
+            os.mkdir('output_image')
         self.saveImage(self.img_encrypted, 'encrypted')
         self.saveImage(self.img_decrypted, 'decrypted')
 
